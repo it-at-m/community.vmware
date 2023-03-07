@@ -170,6 +170,11 @@ options:
       - A dictionary of advanced HA settings.
       default: {}
       type: dict
+    heartbeat_datastores:
+      description:
+      - A list of the heartbeat datastores.
+      type: list
+      elements: str
     apd_response:
       description:
       - VM storage protection setting for storage failures categorized as All Paths Down (APD).
@@ -256,6 +261,7 @@ from ansible_collections.community.vmware.plugins.module_utils.vmware import (
     vmware_argument_spec,
     wait_for_task,
     option_diff,
+    find_datastore_by_name,
 )
 from ansible.module_utils._text import to_native
 
@@ -293,6 +299,15 @@ class VMwareCluster(PyVmomi):
         else:
             self.changed_advanced_settings = None
 
+        self.heartbeat_datastore_names = self.params.get('heartbeat_datastores')
+        self.heartbeat_datastores = []
+        for ds_name in self.heartbeat_datastore_names:
+            ds = find_datastore_by_name(self.content, ds_name, self.datacenter)
+            if ds is None:
+                self.module.fail_json(msg="Datastore %s does not exist." % ds_name)
+            else:
+                self.heartbeat_datastores.append(ds)
+
     def get_failover_hosts(self):
         """
         Get failover hosts for failover_host_admission_control policy
@@ -324,6 +339,7 @@ class VMwareCluster(PyVmomi):
             das_config.vmMonitoring != self.params.get("ha_vm_monitoring")
             or das_config.hostMonitoring != self.params.get("ha_host_monitoring")
             or das_config.admissionControlEnabled != self.ha_admission_control
+            or [ds for ds in das_config.heartbeatDatastore if ds.name not in set(ds.name for ds in self.heartbeat_datastores)] != 0
             or das_config.defaultVmSettings.restartPriority
             != self.params.get("ha_restart_priority")
             or das_config.defaultVmSettings.isolationResponse
@@ -447,6 +463,9 @@ class VMwareCluster(PyVmomi):
                 cluster_config_spec.dasConfig.hostMonitoring = self.params.get('ha_host_monitoring')
                 cluster_config_spec.dasConfig.vmMonitoring = self.params.get('ha_vm_monitoring')
 
+                if self.heartbeat_datastores:
+                    cluster_config_spec.dasConfig.heartbeatDatastore = self.heartbeat_datastores
+
                 if self.changed_advanced_settings:
                     cluster_config_spec.dasConfig.option = self.changed_advanced_settings
 
@@ -482,6 +501,7 @@ def main():
                                      default='none',
                                      choices=['none', 'powerOff', 'shutdown']),
         advanced_settings=dict(type='dict', default=dict(), required=False),
+        heartbeat_datastores=dict(type='list', elements='str', required=False),
         # HA VM Monitoring related parameters
         ha_vm_monitoring=dict(type='str',
                               choices=['vmAndAppMonitoring', 'vmMonitoringOnly', 'vmMonitoringDisabled'],
